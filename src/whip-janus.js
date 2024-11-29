@@ -96,13 +96,6 @@ var whipJanus = function(janusConfig) {
 				whip.info('Janus WebSocket Connection Closed');
 				cleanup();
 				disconnectedCB();
-				// Clean up all sessions on disconnect
-				for (let uuid in sessions) {
-					let session = sessions[uuid];
-					if (session && session.teardown && typeof session.teardown === "function") {
-						session.teardown(uuid);
-					}
-				}
 			});
 			connection.on('message', function(message) {
 				if(message.type === 'utf8') {
@@ -201,14 +194,6 @@ var whipJanus = function(janusConfig) {
 		this.hangup({ uuid: uuid });
 		delete sessions[uuid];
 	};
-
-	// Update the session's last active time on relevant events
-	function updateLastActive(uuid) {
-		const session = sessions[uuid];
-		if (session) {
-			session.lastActive = Date.now();
-		}
-	}
 
 	// Public method for publishing in the VideoRoom
 	this.publish = function(details, callback) {
@@ -369,7 +354,6 @@ var whipJanus = function(janusConfig) {
 				}
 			});
 		});
-		updateLastActive(details.uuid);
 	};
 	this.forward = function(details, callback) {
 		callback = (typeof callback === "function") ? callback : noop;
@@ -462,7 +446,6 @@ var whipJanus = function(janusConfig) {
 			// Done
 			callback();
 		});
-		updateLastActive(details.uuid);
 	}
 	this.trickle = function(details, callback) {
 		callback = (typeof callback === "function") ? callback : noop;
@@ -496,7 +479,6 @@ var whipJanus = function(janusConfig) {
 			// Unsubscribe from the transaction right away
 			delete that.config.janus.transactions[response["transaction"]];
 		});
-		updateLastActive(details.uuid);
 	};
 	this.restart = function(details, callback) {
 		callback = (typeof callback === "function") ? callback : noop;
@@ -557,7 +539,6 @@ var whipJanus = function(janusConfig) {
 				callback(null, { jsep: jsep });
 			}
 		});
-		updateLastActive(details.uuid);
 	};
 	this.hangup = function(details, callback) {
 		callback = (typeof callback === "function") ? callback : noop;
