@@ -216,145 +216,155 @@ var whipJanus = function(janusConfig) {
 			return;
 		}
 		if(session.handle) {
-			callback({ error: "WebRTC " + uuid + " already published" });
-			return;
+			// If already connected, disconnect first
+			whip.debug("Session already connected, disconnecting first:", uuid);
+			that.hangup({ uuid: uuid }, function() {
+				whip.debug("Disconnected, proceeding with new connection:", uuid);
+				establishConnection();
+			});
+		} else {
+			establishConnection();
 		}
-		// If we're talking to multistream Janus and forwarding, extract the mids
-		if(recipient && that.config.janus.multistream && jsep.sdp) {
-			let lines = jsep.sdp.split("\r\n");
-			let type = null;
-			for(let i=0; i<lines.length; i++) {
-				const mline = lines[i].match(/m=(\w+) */);
-				if(mline) {
-					type = mline[1];
-					continue;
-				}
-				if(type !== "audio" && type !== "video")
-					continue;
-				let mid = lines[i].match('a=mid:(.+)');
-				if(mid) {
-					if(type === "audio" && !session.audioMid)
-						session.audioMid = mid[1];
-					else if(type === "video" && !session.videoMid)
-						session.videoMid = mid[1];
-					if(session.audioMid && session.videoMid)
-						break;
+
+		function establishConnection() {
+			// If we're talking to multistream Janus and forwarding, extract the mids
+			if(recipient && that.config.janus.multistream && jsep.sdp) {
+				let lines = jsep.sdp.split("\r\n");
+				let type = null;
+				for(let i=0; i<lines.length; i++) {
+					const mline = lines[i].match(/m=(\w+) */);
+					if(mline) {
+						type = mline[1];
+						continue;
+					}
+					if(type !== "audio" && type !== "video")
+						continue;
+					let mid = lines[i].match('a=mid:(.+)');
+					if(mid) {
+						if(type === "audio" && !session.audioMid)
+							session.audioMid = mid[1];
+						else if(type === "video" && !session.videoMid)
+							session.videoMid = mid[1];
+						if(session.audioMid && session.videoMid)
+							break;
+					}
 				}
 			}
-		}
-		// Create a handle to attach to specified plugin
-		whip.debug("Creating handle for session " + uuid);
-		let attach = {
-			janus: "attach",
-			session_id: that.config.janus.session.id,
-			plugin: "janus.plugin.videoroom"
-		};
-		janusSend(attach, function(response) {
-			whip.debug("Attach response:", response);
-			// Unsubscribe from the transaction
-			delete that.config.janus.transactions[response["transaction"]];
-			let event = response["janus"];
-			if(event === "error") {
-				whip.err("Got an error attaching to the plugin:", response["error"].reason);
-				callback({ error: response["error"].reason });
-				return;
-			}
-			// Take note of the handle ID
-			let handle = response["data"]["id"];
-			whip.debug("Plugin handle for session " + session + " is " + handle);
-			session.handle = handle;
-			handles[handle] = { uuid: uuid, room: room };
-			// Do we have pending trickles?
-			if(session.candidates && session.candidates.length > 0) {
-				// Send a trickle candidates bunch request
-				let candidates = {
-					janus: "trickle",
-					session_id: that.config.janus.session.id,
-					handle_id: handle,
-					candidates: session.candidates
-				}
-				janusSend(candidates, function(response) {
-					// Unsubscribe from the transaction right away
-					delete that.config.janus.transactions[response["transaction"]];
-				});
-				session.candidates = [];
-			}
-			// Send a request to the plugin to publish
-			let publish = {
-				janus: "message",
+			// Create a handle to attach to specified plugin
+			whip.debug("Creating handle for session " + uuid);
+			let attach = {
+				janus: "attach",
 				session_id: that.config.janus.session.id,
-				handle_id: handle,
-				body: {
-					request: "joinandconfigure",
-					room: room,
-					pin: pin,
-					ptype: "publisher",
-					display: label,
-					audio: true,
-					video: true
-				},
-				jsep: jsep
+				plugin: "janus.plugin.videoroom"
 			};
-			janusSend(publish, function(response) {
+			janusSend(attach, function(response) {
+				whip.debug("Attach response:", response);
+				// Unsubscribe from the transaction
+				delete that.config.janus.transactions[response["transaction"]];
 				let event = response["janus"];
 				if(event === "error") {
-					delete that.config.janus.transactions[response["transaction"]];
-					whip.err("Got an error publishing:", response["error"].reason);
+					whip.err("Got an error attaching to the plugin:", response["error"].reason);
 					callback({ error: response["error"].reason });
 					return;
 				}
-				if(event === "ack") {
-					whip.debug("Got an ack to the setup for session " + uuid + ", waiting for result...");
-					return;
+				// Take note of the handle ID
+				let handle = response["data"]["id"];
+				whip.debug("Plugin handle for session " + session + " is " + handle);
+				session.handle = handle;
+				handles[handle] = { uuid: uuid, room: room };
+				// Do we have pending trickles?
+				if(session.candidates && session.candidates.length > 0) {
+					// Send a trickle candidates bunch request
+					let candidates = {
+						janus: "trickle",
+						session_id: that.config.janus.session.id,
+						handle_id: handle,
+						candidates: session.candidates
+					}
+					janusSend(candidates, function(response) {
+						// Unsubscribe from the transaction right away
+						delete that.config.janus.transactions[response["transaction"]];
+					});
+					session.candidates = [];
 				}
-				// Get the plugin data: is this a success or an error?
-				let data = response.plugindata.data;
-				if(data.error) {
-					// Unsubscribe from the transaction
-					delete that.config.janus.transactions[response["transaction"]];
-					whip.err("Got an error publishing:", data.error);
-					callback({ error: data.error });
-					return;
-				}
-				whip.debug("Got an answer to the setup for session " + uuid + ":", data);
-				if(data["reason"]) {
-					// Unsubscribe from the transaction
-					delete that.config.janus.transactions[response["transaction"]];
-					// Notify the error
-					callback({ error: data["reason"] });
-				} else {
-					// Unsubscribe from the transaction
-					delete that.config.janus.transactions[response["transaction"]];
-					handles[handle].publisher = data["id"];
-					// Should we RTP forward too?
-					if(recipient && recipient.host && (recipient.audioPort > 0 || recipient.videoPort > 0)) {
-						// RTP forward the publisher to the specified address
-						let forwardDetails = {
-							uuid: uuid,
-							secret: secret,			// RTP forwarding may need the room secret
-							adminKey: adminKey,		// RTP forwarding may need the plugin Admin Key
-							recipient: recipient
-						};
-						that.forward(forwardDetails, function(err) {
-							if(err) {
-								// Something went wrong
-								that.hangup({ uuid: uuid });
-								callback(err);
-								return;
-							}
-							// Notify the response
-							let jsep = response["jsep"];
-							callback(null, { jsep: jsep });
-						});
+				// Send a request to the plugin to publish
+				let publish = {
+					janus: "message",
+					session_id: that.config.janus.session.id,
+					handle_id: handle,
+					body: {
+						request: "joinandconfigure",
+						room: room,
+						pin: pin,
+						ptype: "publisher",
+						display: label,
+						audio: true,
+						video: true
+					},
+					jsep: jsep
+				};
+				janusSend(publish, function(response) {
+					let event = response["janus"];
+					if(event === "error") {
+						delete that.config.janus.transactions[response["transaction"]];
+						whip.err("Got an error publishing:", response["error"].reason);
+						callback({ error: response["error"].reason });
 						return;
 					}
-					// Notify the response
-					let jsep = response["jsep"];
-					callback(null, { jsep: jsep });
-				}
+					if(event === "ack") {
+						whip.debug("Got an ack to the setup for session " + uuid + ", waiting for result...");
+						return;
+					}
+					// Get the plugin data: is this a success or an error?
+					let data = response.plugindata.data;
+					if(data.error) {
+						// Unsubscribe from the transaction
+						delete that.config.janus.transactions[response["transaction"]];
+						whip.err("Got an error publishing:", data.error);
+						callback({ error: data.error });
+						return;
+					}
+					whip.debug("Got an answer to the setup for session " + uuid + ":", data);
+					if(data["reason"]) {
+						// Unsubscribe from the transaction
+						delete that.config.janus.transactions[response["transaction"]];
+						// Notify the error
+						callback({ error: data["reason"] });
+					} else {
+						// Unsubscribe from the transaction
+						delete that.config.janus.transactions[response["transaction"]];
+						handles[handle].publisher = data["id"];
+						// Should we RTP forward too?
+						if(recipient && recipient.host && (recipient.audioPort > 0 || recipient.videoPort > 0)) {
+							// RTP forward the publisher to the specified address
+							let forwardDetails = {
+								uuid: uuid,
+								secret: secret,			// RTP forwarding may need the room secret
+								adminKey: adminKey,		// RTP forwarding may need the plugin Admin Key
+								recipient: recipient
+							};
+							that.forward(forwardDetails, function(err) {
+								if(err) {
+									// Something went wrong
+									that.hangup({ uuid: uuid });
+									callback(err);
+									return;
+								}
+								// Notify the response
+								let jsep = response["jsep"];
+								callback(null, { jsep: jsep });
+							});
+							return;
+						}
+						// Notify the response
+						let jsep = response["jsep"];
+						callback(null, { jsep: jsep });
+					}
+				});
 			});
-		});
+		}
 	};
+
 	this.forward = function(details, callback) {
 		callback = (typeof callback === "function") ? callback : noop;
 		whip.debug("Forwarding publisher:", details);
