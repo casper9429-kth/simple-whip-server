@@ -34,6 +34,25 @@ const config = require('./config.js');
 var janus = null;
 var endpoints = {}, resources = {};
 
+// Configuration for session timeout (e.g., 30 seconds)
+const SESSION_TIMEOUT = 30000;
+
+// Function to check and clean up inactive sessions
+function checkInactiveSessions() {
+    const now = Date.now();
+    for (const id in endpoints) {
+        const endpoint = endpoints[id];
+        if (endpoint && endpoint.lastActive && (now - endpoint.lastActive > SESSION_TIMEOUT)) {
+            whip.info(`[${id}] Session timed out, cleaning up`);
+            janus.removeSession({ uuid: id });
+            delete endpoints[id];
+        }
+    }
+}
+
+// Periodically check for inactive sessions
+setInterval(checkInactiveSessions, SESSION_TIMEOUT / 2);
+
 // Startup
 async.series([
 	// 1. Connect to Janus
@@ -202,6 +221,7 @@ function setupRest(app) {
 		endpoints[id] = {
 			id: id,
 			room: room,
+			lastActive: Date.now(), // Track the creation time
 			secret: secret,
 			adminKey: adminKey,
 			pin: pin,
